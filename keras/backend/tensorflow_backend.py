@@ -184,7 +184,11 @@ def variable(value, dtype=_FLOATX, name=None):
 
 
 def _initialize_variables():
-    variables = tf.all_variables()
+    if hasattr(tf, 'global_variables'):
+        variables = tf.global_variables()
+    else:
+        variables = tf.all_variables()
+
     uninitialized_variables = []
     for v in variables:
         if not hasattr(v, '_keras_initialized') or not v._keras_initialized:
@@ -192,8 +196,10 @@ def _initialize_variables():
             v._keras_initialized = True
     if uninitialized_variables:
         sess = get_session()
-        sess.run(tf.initialize_variables(uninitialized_variables))
-
+        if hasattr(tf, 'variables_initializer'):
+            sess.run(tf.variables_initializer(uninitialized_variables))
+        else:
+            sess.run(tf.initialize_variables(uninitialized_variables))
 
 def placeholder(shape=None, ndim=None, dtype=_FLOATX, sparse=False, name=None):
     '''Instantiates a placeholder.
@@ -839,6 +845,25 @@ def repeat(x, n):
     return tf.tile(x, pattern)
 
 
+def arange(start, stop=None, step=1, dtype='int32'):
+    '''Creates a 1-D tensor containing a sequence of integers.
+
+    The function arguments use the same convention as
+    Theano's arange: if only one argument is provided,
+    it is in fact the "stop" argument.
+
+    The default type of the returned tensor is 'int32' to
+    match TensorFlow's default.
+    '''
+    # Match the behavior of numpy and Theano by returning an empty seqence.
+    if stop is None and start < 0:
+        start = 0
+    result = tf.range(start, limit=stop, delta=step, name='arange')
+    if dtype != 'int32':
+        result = cast(result, dtype)
+    return result
+
+
 def tile(x, n):
     if not hasattr(n, 'shape') and not hasattr(n, '__len__') and not hasattr(n, '_shape'):
         n = [n]
@@ -1139,11 +1164,13 @@ def rnn(step_function, inputs, initial_states,
                     time step.
                 states: list of tensors.
             Returns:
-                output: tensor with shape (samples, output_dim) (no time dimension),
+                output: tensor with shape (samples, output_dim)
+                    (no time dimension).
                 new_states: list of tensors, same length and shapes
                     as 'states'. The first state in the list must be the
                     output tensor at the previous timestep.
-        initial_states: tensor with shape (samples, output_dim) (no time dimension),
+        initial_states: tensor with shape (samples, output_dim)
+            (no time dimension),
             containing the initial values for the states used in
             the step function.
         go_backwards: boolean. If True, do the iteration over
@@ -1167,7 +1194,8 @@ def rnn(step_function, inputs, initial_states,
             the step function, of shape (samples, ...).
     '''
     ndim = len(inputs.get_shape())
-    assert ndim >= 3, 'Input should be at least 3D.'
+    if ndim < 3:
+        raise ValueError('Input should be at least 3D.')
     axes = [1, 0] + list(range(2, ndim))
     inputs = tf.transpose(inputs, (axes))
 
@@ -1183,8 +1211,8 @@ def rnn(step_function, inputs, initial_states,
 
     if unroll:
         if not inputs.get_shape()[0]:
-            raise Exception('Unrolling requires a fixed number of timesteps.')
-
+            raise ValueError('Unrolling requires a '
+                             'fixed number of timesteps.')
         states = initial_states
         successive_states = []
         successive_outputs = []
@@ -1201,13 +1229,18 @@ def rnn(step_function, inputs, initial_states,
             for input, mask_t in zip(input_list, mask_list):
                 output, new_states = step_function(input, states + constants)
 
-                # tf.select needs its condition tensor to be the same shape as its two
-                # result tensors, but in our case the condition (mask) tensor is
-                # (nsamples, 1), and A and B are (nsamples, ndimensions). So we need to
-                # broadcast the mask to match the shape of A and B. That's what the
-                # tile call does, is just repeat the mask along its second dimension
-                # ndimensions times.
-                tiled_mask_t = tf.tile(mask_t, tf.pack([1, tf.shape(output)[1]]))
+                # tf.select needs its condition tensor
+                # to be the same shape as its two
+                # result tensors, but in our case
+                # the condition (mask) tensor is
+                # (nsamples, 1), and A and B are (nsamples, ndimensions).
+                # So we need to
+                # broadcast the mask to match the shape of A and B.
+                # That's what the tile call does,
+                # it just repeats the mask along its second dimension
+                # n times.
+                tiled_mask_t = tf.tile(mask_t,
+                                       tf.pack([1, tf.shape(output)[1]]))
 
                 if len(successive_outputs) == 0:
                     prev_output = zeros_like(output)
@@ -1219,9 +1252,11 @@ def rnn(step_function, inputs, initial_states,
                 return_states = []
                 for state, new_state in zip(states, new_states):
                     # (see earlier comment for tile explanation)
-                    tiled_mask_t = tf.tile(mask_t, tf.pack([1, tf.shape(new_state)[1]]))
-                    return_states.append(tf.select(tiled_mask_t, new_state, state))
-
+                    tiled_mask_t = tf.tile(mask_t,
+                                           tf.pack([1, tf.shape(new_state)[1]]))
+                    return_states.append(tf.select(tiled_mask_t,
+                                                   new_state,
+                                                   state))
                 states = return_states
                 successive_outputs.append(output)
                 successive_states.append(states)
@@ -1264,7 +1299,7 @@ def rnn(step_function, inputs, initial_states,
                                  'as its first state at time `t` '
                                  'the output at time `t-1`).')
             if go_backwards:
-                mask = tf.reverse(mask, [True] + [False] * (ndim - 2))
+                mask = tf.reverse(mask, [True] + [False] * (ndim - 1))
 
             mask_ta = tensor_array_ops.TensorArray(
                 dtype=tf.bool,
@@ -1278,7 +1313,10 @@ def rnn(step_function, inputs, initial_states,
                 output, new_states = step_function(current_input,
                                                    tuple(states) +
                                                    tuple(constants))
-                tiled_mask_t = tf.tile(mask_t, tf.pack([1, tf.shape(output)[1]]))
+                for state, new_state in zip(states, new_states):
+                    new_state.set_shape(state.get_shape())
+                tiled_mask_t = tf.tile(mask_t,
+                                       tf.pack([1, tf.shape(output)[1]]))
                 output = tf.select(tiled_mask_t, output, states[0])
                 new_states = [tf.select(tiled_mask_t, new_states[i], states[i]) for i in range(len(states))]
                 output_ta_t = output_ta_t.write(time, output)
@@ -1289,6 +1327,8 @@ def rnn(step_function, inputs, initial_states,
                 output, new_states = step_function(current_input,
                                                    tuple(states) +
                                                    tuple(constants))
+                for state, new_state in zip(states, new_states):
+                    new_state.set_shape(state.get_shape())
                 output_ta_t = output_ta_t.write(time, output)
                 return (time + 1, output_ta_t) + tuple(new_states)
 
@@ -1974,3 +2014,52 @@ def ctc_decode(y_pred, input_length, greedy=True, beam_width=100,
                      for st in decoded]
 
     return (decoded_dense, log_prob)
+
+
+# HIGH ORDER FUNCTIONS
+
+def map_fn(fn, elems, name=None):
+    '''Map the function fn over the elements elems and return the outputs.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems
+        elems: tensor
+        name: A string name for the map node in the graph
+
+    # Returns
+        Tensor with first dimension equal to the elems and second depending on
+        fn
+    '''
+    return tf.map_fn(fn, elems, name=name)
+
+
+def foldl(fn, elems, initializer=None, name=None):
+    '''Reduce elems using fn to combine them from left to right.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems and an
+            accumulator, for instance lambda acc, x: acc + x
+        elems: tensor
+        initializer: The first value used (elems[0] in case of None)
+        name: A string name for the foldl node in the graph
+
+    # Returns
+        Same type and shape as initializer
+    '''
+    return tf.foldl(fn, elems, initializer=initializer, name=name)
+
+
+def foldr(fn, elems, initializer=None, name=None):
+    '''Reduce elems using fn to combine them from right to left.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems and an
+            accumulator, for instance lambda acc, x: acc + x
+        elems: tensor
+        initializer: The first value used (elems[-1] in case of None)
+        name: A string name for the foldr node in the graph
+
+    # Returns
+        Same type and shape as initializer
+    '''
+    return tf.foldr(fn, elems, initializer=initializer, name=name)

@@ -550,6 +550,19 @@ def repeat(x, n):
     return T.extra_ops.repeat(x, n, axis=1)
 
 
+def arange(start, stop=None, step=1, dtype='int32'):
+    '''Creates a 1-D tensor containing a sequence of integers.
+
+    The function arguments use the same convention as
+    Theano's arange: if only one argument is provided,
+    it is in fact the "stop" argument.
+
+    The default type of the returned tensor is 'int32' to
+    match TensorFlow's default.
+    '''
+    return T.arange(start, stop=stop, step=step, dtype=dtype)
+
+
 def tile(x, n):
     return T.tile(x, n)
 
@@ -1008,7 +1021,7 @@ def in_train_phase(x, alt):
         return x
     elif _LEARNING_PHASE is 0:
         return alt
-    x = T.switch(_LEARNING_PHASE, x, alt)
+    x = theano.ifelse.ifelse(_LEARNING_PHASE, x, alt)
     x._uses_learning_phase = True
     return x
 
@@ -1018,7 +1031,7 @@ def in_test_phase(x, alt):
         return alt
     elif _LEARNING_PHASE is 0:
         return x
-    x = T.switch(_LEARNING_PHASE, alt, x)
+    x = theano.ifelse.ifelse(_LEARNING_PHASE, alt, x)
     x._uses_learning_phase = True
     return x
 
@@ -1380,6 +1393,7 @@ def deconv2d(x, kernel, output_shape, strides=(1, 1),
     th_border_mode = _preprocess_border_mode(border_mode)
     np_kernel = kernel.eval()
     filter_shape = _preprocess_conv2d_filter_shape(dim_ordering, filter_shape)
+    filter_shape = tuple(filter_shape[i] for i in (1, 0, 2, 3))
 
     op = T.nnet.abstract_conv.AbstractConv2d_gradInputs(imshp=output_shape,
                                                         kshp=filter_shape,
@@ -1851,3 +1865,68 @@ def ctc_batch_cost(y_true, y_pred, input_length, label_length):
 
     ret = ret.dimshuffle('x', 0)
     return ret
+
+
+# HIGH ORDER FUNCTIONS
+
+def map_fn(fn, elems, name=None):
+    '''Map the function fn over the elements elems and return the outputs.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems
+        elems: tensor, at least 2 dimensional
+        name: A string name for the map node in the graph
+
+    # Returns
+        Tensor with first dimension equal to the elems and second depending on
+        fn
+    '''
+    return theano.map(fn, elems, name=name)[0]
+
+
+def foldl(fn, elems, initializer=None, name=None):
+    '''Reduce elems using fn to combine them from left to right.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems and an
+            accumulator, for instance lambda acc, x: acc + x
+        elems: tensor
+        initializer: The first value used (elems[0] in case of None)
+        name: A string name for the foldl node in the graph
+
+    # Returns
+        Same type and shape as initializer
+    '''
+    if initializer is None:
+        initializer = elems[0]
+        elems = elems[1:]
+
+    # We need to change the order of the arguments because theano accepts x as
+    # first parameter and accumulator as second
+    fn2 = lambda x, acc: fn(acc, x)
+
+    return theano.foldl(fn2, elems, initializer, name=name)[0]
+
+
+def foldr(fn, elems, initializer=None, name=None):
+    '''Reduce elems using fn to combine them from right to left.
+
+    # Arguments
+        fn: Callable that will be called upon each element in elems and an
+            accumulator, for instance lambda acc, x: acc + x
+        elems: tensor
+        initializer: The first value used (elems[-1] in case of None)
+        name: A string name for the foldr node in the graph
+
+    # Returns
+        Same type and shape as initializer
+    '''
+    if initializer is None:
+        initializer = elems[-1]
+        elems = elems[:-1]
+
+    # We need to change the order of the arguments because theano accepts x as
+    # first parameter and accumulator as second
+    fn2 = lambda x, acc: fn(acc, x)
+
+    return theano.foldr(fn2, elems, initializer, name=name)[0]

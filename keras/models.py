@@ -11,7 +11,6 @@ from .utils.io_utils import ask_to_proceed_with_overwrite
 from .engine.training import Model
 from .engine.topology import get_source_inputs, Node, Layer, Merge
 from .optimizers import optimizer_from_config
-from .legacy.models import Graph
 
 
 def save_model(model, filepath, overwrite=True):
@@ -152,7 +151,7 @@ def load_model(filepath, custom_objects={}):
         return model
     training_config = json.loads(training_config.decode('utf-8'))
     optimizer_config = training_config['optimizer_config']
-    optimizer = optimizer_from_config(optimizer_config)
+    optimizer = optimizer_from_config(optimizer_config, custom_objects=custom_objects)
 
     # recover loss functions and metrics
     loss = deserialize(training_config['loss'])
@@ -251,7 +250,7 @@ class Sequential(Model):
         self.model = None  # internal Model instance
         self.inputs = []  # tensors
         self.outputs = []  # tensors (length 1)
-        self.trainable = True
+        self._trainable = True
 
         # model attributes
         self.inbound_nodes = []
@@ -384,6 +383,7 @@ class Sequential(Model):
                             ' Add some layers first.')
         # actually create the model
         self.model = Model(self.inputs, self.outputs[0], name=self.name + '_model')
+        self.model.trainable = self.trainable
 
         # mirror model attributes
         self.supports_masking = self.model.supports_masking
@@ -454,6 +454,16 @@ class Sequential(Model):
             all_attrs = dict(list(all_attrs.items()) +
                              list(layer_dict.items()))
         return all_attrs
+
+    @property
+    def trainable(self):
+        return self._trainable
+
+    @trainable.setter
+    def trainable(self, value):
+        if self.model:
+            self.model.trainable = value
+        self._trainable = value
 
     @property
     def trainable_weights(self):

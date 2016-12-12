@@ -3,7 +3,7 @@ from __future__ import print_function
 from .generic_utils import get_from_module
 from .np_utils import convert_kernel
 from ..layers import *
-from ..models import Model, Sequential, Graph
+from ..models import Model, Sequential
 from .. import backend as K
 
 
@@ -15,7 +15,7 @@ def layer_from_config(config, custom_objects={}):
             of custom (non-Keras) objects to class/functions
 
     # Returns
-        Layer instance (may be Model, Sequential, Graph, Layer...)
+        Layer instance (may be Model, Sequential, Layer...)
     '''
     # Insert custom layers into globals so they can
     # be accessed by `get_from_module`.
@@ -26,8 +26,6 @@ def layer_from_config(config, custom_objects={}):
 
     if class_name == 'Sequential':
         layer_class = Sequential
-    elif class_name == 'Graph':
-        layer_class = Graph
     elif class_name in ['Model', 'Container']:
         layer_class = Model
     else:
@@ -53,6 +51,8 @@ def print_summary(layers, relevant_nodes=None, line_length=100, positions=[.33, 
     def print_row(fields, positions):
         line = ''
         for i in range(len(fields)):
+            if i > 0:
+                line = line[:-1] + ' '
             line += str(fields[i])
             line = line[:positions[i]]
             line += ' ' * (positions[i] - len(line))
